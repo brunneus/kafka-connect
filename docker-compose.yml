@@ -1,0 +1,112 @@
+---
+    version: '2'
+    
+    services:
+      zookeeper:
+        image: confluentinc/cp-zookeeper:7.0.0
+        hostname: zookeeper
+        container_name: zookeeper
+        ports:
+          - "2181:2181"
+        environment:
+          ZOOKEEPER_CLIENT_PORT: 2181
+          ZOOKEEPER_TICK_TIME: 2000
+
+      kafdrop:
+        image: obsidiandynamics/kafdrop:latest
+        depends_on:
+          - kafka
+        ports:
+          - 9000:9000
+        environment:
+          KAFKA_BROKERCONNECT: kafka:9092
+    
+      kafka:
+        image: confluentinc/cp-kafka:7.0.0
+        hostname: kafka
+        container_name: kafka
+        depends_on:
+          - zookeeper
+        ports:
+          - "9092:9092"
+          - "29092:29092"
+        environment:
+          KAFKA_BROKER_ID: 1
+          KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+
+      kafka-connect:
+        image: confluentinc/cp-kafka-connect-base:7.0.0
+        hostname: kafka-connect
+        container_name: kafka-connect
+        depends_on:
+          - zookeeper
+          # - kafka
+        ports:
+          - 8083:8083
+          - 8888:8888
+        environment:
+          CONNECT_BOOTSTRAP_SERVERS: "kafka:9092"
+          CONNECT_REST_PORT: 8083
+          KAFKA_DEBUG: 1
+          JAVA_DEBUG_PORT: "*:8888"
+          CONNECT_REST_ADVERTISED_HOST_NAME: "connect"
+          CONNECT_GROUP_ID: compose-connect-group
+          CONNECT_CONFIG_STORAGE_TOPIC: connect-configs
+          CONNECT_OFFSET_STORAGE_TOPIC: connect-offsets
+          CONNECT_STATUS_STORAGE_TOPIC: connect-status
+          CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+          CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+          CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+          CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+          CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+          CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+          CONNECT_LOG4J_ROOT_LOGLEVEL: "INFO"
+          CONNECT_LOG4J_LOGGERS: "org.apache.kafka.connect.runtime.rest=WARN,org.reflections=ERROR"
+          CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+          CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+          CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+          CONNECT_PLUGIN_PATH: '/usr/share/java,/kafka-plugins,/usr/share/confluent-hub-components'
+        volumes:
+          - ./kafka-connect:/kafka-plugins
+          - ./transforms/confluent-hub-components:/usr/share/confluent-hub-components
+          
+      kibana:
+        image: docker.elastic.co/kibana/kibana:7.11.2
+        depends_on:
+          elasticsearch:
+            condition: service_healthy
+        environment:
+          ELASTICSEARCH_URL: http://elasticsearch:9200
+          ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+        ports:
+        - 5601:5601
+        healthcheck:
+          interval: 10s
+          retries: 20
+          test: curl --write-out 'HTTP %{http_code}' --fail --silent --output /dev/null http://localhost:5601/api/status
+
+      elasticsearch:
+        image: docker.elastic.co/elasticsearch/elasticsearch:7.11.2
+        environment:
+        - bootstrap.memory_lock=true
+        - cluster.name=docker-cluster
+        - cluster.routing.allocation.disk.threshold_enabled=false
+        - discovery.type=single-node
+        - ES_JAVA_OPTS=-XX:UseAVX=2 -Xms1g -Xmx1g
+        ulimits:
+          memlock:
+            hard: -1
+            soft: -1
+        ports:
+        - 9200:9200
+        healthcheck:
+          interval: 20s
+          retries: 10
+          test: curl -s http://localhost:9200/_cluster/health | grep -vq '"status":"red"'
+
